@@ -46,13 +46,13 @@ Over-broad entries are refused (IPv4 shorter than `/8`, IPv6 shorter than `/64`)
 
    **Dockhand / Portainer:** paste [docker-compose.yml](docker-compose.yml) as the stack and the contents of `.env.example` (filled in) as the stack's environment variables. You can mark the tokens/keys as secrets. The compose file maps every variable into the container explicitly, which these tools require.
 
-4. Before the first run, find the UniFi item format:
+4. Before the first run, check the API key and list IDs work:
 
    ```sh
    docker compose run --rm knock-sync --dump
    ```
 
-   New items copy the shape of the first existing item, so seed each list in the UI with the sentinel (`192.0.2.1` / `2001:db8::/64`).
+   UniFi won't save an empty list, so seed each list in the UI with the placeholder (`192.0.2.1` / `2001:db8::/64`). The sync writes single addresses as `IP_ADDRESS` items and CIDR ranges (e.g. `160.79.104.0/21`) as `SUBNET` items.
 
 The container runs as non-root on a read-only filesystem. It has a Docker `HEALTHCHECK`: it's unhealthy if no sync has succeeded in `HEALTH_MAX_AGE`, which defaults to max(120s, 4×interval).
 

@@ -316,28 +316,27 @@ def normalise(entries):
 
 # --- UniFi ------------------------------------------------------------------------------------
 
-ITEM_KEYS = ("value", "address", "ip", "cidr")
-
+# Traffic matching list items (UniFi Network Integration API):
+#   {"type": "IP_ADDRESS", "value": "1.2.3.4"}
+#   {"type": "SUBNET", "value": "1.2.3.0/24"}
+#   {"type": "IP_ADDRESS_RANGE", "start": "1.2.3.4", "stop": "1.2.3.9"}   (IPv4 only)
 
 def item_value(item):
     if isinstance(item, str):
         return item
-    for k in ITEM_KEYS:
+    if item.get("type") == "IP_ADDRESS_RANGE" or ("start" in item and "stop" in item):
+        return f"{item['start']}-{item['stop']}"
+    for k in ("value", "address", "ip", "cidr"):
         if k in item:
             return item[k]
     raise ValueError(f"unknown item shape {item!r} - run --dump and adjust item_value/make_item")
 
 
 def make_item(template, value):
-    """Mirror whatever shape UniFi uses for existing items (string or object)."""
-    if isinstance(template, str) or template is None:
+    """Build a list item for a canonical value; the item type depends on the value, not the template."""
+    if isinstance(template, str):
         return value
-    item = dict(template)
-    for k in ITEM_KEYS:
-        if k in item:
-            item[k] = value
-            break
-    return item
+    return {"type": "SUBNET" if "/" in value else "IP_ADDRESS", "value": value}
 
 
 def _canon_or_raw(value):

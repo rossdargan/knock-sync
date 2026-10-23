@@ -93,9 +93,34 @@ class StaticTests(unittest.TestCase):
 class UniFiItemTests(unittest.TestCase):
     def test_item_shapes(self):
         self.assertEqual(ks.item_value("1.2.3.4"), "1.2.3.4")
-        self.assertEqual(ks.item_value({"type": "IP", "value": "1.2.3.4"}), "1.2.3.4")
-        self.assertEqual(ks.make_item({"type": "IP", "value": "x"}, "5.5.5.5"), {"type": "IP", "value": "5.5.5.5"})
-        self.assertEqual(ks.make_item(None, "5.5.5.5"), "5.5.5.5")
+        self.assertEqual(ks.item_value({"type": "IP_ADDRESS", "value": "1.2.3.4"}), "1.2.3.4")
+        self.assertEqual(ks.item_value({"type": "SUBNET", "value": "10.0.0.0/8"}), "10.0.0.0/8")
+        self.assertEqual(ks.item_value({"type": "IP_ADDRESS_RANGE", "start": "1.1.1.1", "stop": "1.1.1.9"}),
+                         "1.1.1.1-1.1.1.9")
+        tmpl = {"type": "IP_ADDRESS", "value": "x"}
+        self.assertEqual(ks.make_item(tmpl, "5.5.5.5"), {"type": "IP_ADDRESS", "value": "5.5.5.5"})
+        self.assertEqual(ks.make_item(tmpl, "160.79.104.0/21"), {"type": "SUBNET", "value": "160.79.104.0/21"})
+        self.assertEqual(ks.make_item(None, "2001:db8::/64"), {"type": "SUBNET", "value": "2001:db8::/64"})
+        self.assertEqual(ks.make_item("1.2.3.4", "5.5.5.5"), "5.5.5.5")
+
+    def test_put_body_mixes_addresses_and_subnets(self):
+        u = ks.UniFi(cfg())
+        sent = []
+
+        def call(method, path, body=None):
+            if method == "PUT":
+                sent.append(body)
+                return body
+            return {"type": "IPV4_ADDRESSES", "name": "knock", "items": [
+                {"type": "IP_ADDRESS", "value": "1.2.3.4"},
+                {"type": "IP_ADDRESS_RANGE", "start": "9.9.9.1", "stop": "9.9.9.5"}]}
+
+        u.call = call
+        v4, _ = ks.normalise(["1.2.3.4", "160.79.104.0/21"])
+        self.assertTrue(u.sync("L4", v4))
+        self.assertEqual(sent[0], {"type": "IPV4_ADDRESSES", "name": "knock", "items": [
+            {"type": "IP_ADDRESS", "value": "1.2.3.4"},
+            {"type": "SUBNET", "value": "160.79.104.0/21"}]})
 
     def test_sync_skips_put_when_equivalent(self):
         u = ks.UniFi(cfg())
