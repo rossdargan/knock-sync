@@ -30,7 +30,7 @@ Over-broad entries are refused (IPv4 shorter than `/8`, IPv6 shorter than `/64`)
 
 ## Deploy
 
-1. Push this repo to GitHub. The [build workflow](.github/workflows/build.yml) runs the tests, then builds `linux/amd64` + `linux/arm64` images and pushes them to `ghcr.io/<owner>/knock-sync`:
+1. Push this repo to GitHub. The [build workflow](.github/workflows/build.yml) runs the tests, then builds `linux/amd64` + `linux/arm64` images and pushes them to `ghcr.io/rossdargan/knock-sync`:
    - `latest` + `sha-xxxxxxx` on pushes to `main`
    - `1.2.3` / `1.2` for `v1.2.3` tags
    - a weekly rebuild that picks up base-image security fixes
@@ -40,7 +40,6 @@ Over-broad entries are refused (IPv4 shorter than `/8`, IPv6 shorter than `/64`)
    ```sh
    cp knock.env.example knock.env      # fill in secrets
    mkdir -p config && cp static.txt.example config/static.txt
-   # edit docker-compose.yml: replace OWNER with your GitHub user (lowercase)
    docker compose pull && docker compose up -d
    docker compose logs -f knock-sync
    ```

@@ -1,7 +1,6 @@
 services:
   knock-sync:
-    # Replace OWNER with your GitHub user/org (lowercase).
-    image: ghcr.io/OWNER/knock-sync:latest
+    image: ghcr.io/rossdargan/knock-sync:latest
     container_name: knock-sync
     restart: unless-stopped
     env_file: knock.env
