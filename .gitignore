@@ -1,4 +1,4 @@
-knock.env
+.env
 config/
 __pycache__/
 *.pyc

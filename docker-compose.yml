@@ -3,7 +3,27 @@ services:
     image: ghcr.io/rossdargan/knock-sync:latest
     container_name: knock-sync
     restart: unless-stopped
-    env_file: knock.env
+    # Values come from the stack's .env file (or Dockhand/Portainer stack variables and secrets).
+    # They must be listed here: Compose uses .env for ${...} interpolation only, not for the container.
+    environment:
+      KNOCK_URL: ${KNOCK_URL:?set KNOCK_URL}
+      KNOCK_SYNC_TOKEN: ${KNOCK_SYNC_TOKEN:?set KNOCK_SYNC_TOKEN}
+      CF_ACCESS_CLIENT_ID: ${CF_ACCESS_CLIENT_ID:?set CF_ACCESS_CLIENT_ID}
+      CF_ACCESS_CLIENT_SECRET: ${CF_ACCESS_CLIENT_SECRET:?set CF_ACCESS_CLIENT_SECRET}
+      KNOCK_DOH: ${KNOCK_DOH:-true}
+      UNIFI_HOST: ${UNIFI_HOST:?set UNIFI_HOST}
+      UNIFI_API_KEY: ${UNIFI_API_KEY:?set UNIFI_API_KEY}
+      UNIFI_SITE_ID: ${UNIFI_SITE_ID:?set UNIFI_SITE_ID}
+      UNIFI_LIST_V4_ID: ${UNIFI_LIST_V4_ID:?set UNIFI_LIST_V4_ID}
+      UNIFI_LIST_V6_ID: ${UNIFI_LIST_V6_ID:-}
+      UNIFI_VERIFY_TLS: ${UNIFI_VERIFY_TLS:-false}
+      STATIC_IPS: ${STATIC_IPS:-}
+      STATIC_HOSTS: ${STATIC_HOSTS:-}
+      SYNC_INTERVAL: ${SYNC_INTERVAL:-15}
+      RECONCILE_INTERVAL: ${RECONCILE_INTERVAL:-300}
+      STATIC_REFRESH: ${STATIC_REFRESH:-300}
+      MAX_BACKOFF: ${MAX_BACKOFF:-300}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
     volumes:
       # Optional: static allowlist at ./config/static.txt, hot-reloaded on change.
       # A directory mount (not a single file) so edits are seen even when editors replace the file.

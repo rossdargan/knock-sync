@@ -34,15 +34,17 @@ Over-broad entries are refused (IPv4 shorter than `/8`, IPv6 shorter than `/64`)
    - `latest` + `sha-xxxxxxx` on pushes to `main`
    - `1.2.3` / `1.2` for `v1.2.3` tags
    - a weekly rebuild that picks up base-image security fixes
-2. If the repo is private, run `docker login ghcr.io` on the host first, with a PAT that has `read:packages`. Alternatively, make the package public under *Packages → knock-sync → Package settings*.
+2. The GHCR package is public, so no `docker login` is needed to pull it.
 3. On the host:
 
    ```sh
-   cp knock.env.example knock.env      # fill in secrets
+   cp .env.example .env      # fill in secrets
    mkdir -p config && cp static.txt.example config/static.txt
    docker compose pull && docker compose up -d
    docker compose logs -f knock-sync
    ```
+
+   **Dockhand / Portainer:** paste [docker-compose.yml](docker-compose.yml) as the stack and the contents of `.env.example` (filled in) as the stack's environment variables. You can mark the tokens/keys as secrets. The compose file maps every variable into the container explicitly, which these tools require.
 
 4. Before the first run, find the UniFi item format:
 
@@ -56,7 +58,7 @@ The container runs as non-root on a read-only filesystem. It has a Docker `HEALT
 
 ## Configuration
 
-See [knock.env.example](knock.env.example) for every variable. Required ones:
+See [.env.example](.env.example) for every variable. If you add a new variable, also map it under `environment:` in [docker-compose.yml](docker-compose.yml). Required ones:
 `KNOCK_URL`, `KNOCK_SYNC_TOKEN`, `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET`, `UNIFI_HOST`, `UNIFI_API_KEY`, `UNIFI_SITE_ID`, `UNIFI_LIST_V4_ID`.
 
 ## CLI
