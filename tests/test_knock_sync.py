@@ -1,0 +1,178 @@
+import os
+import sys
+import tempfile
+import unittest
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+import knock_sync as ks  # noqa: E402
+
+
+def cfg(**kw):
+    base = dict(unifi_host="https://unifi", unifi_key="k", site="s", list_v4="L4", list_v6="L6",
+                static_file="", reconcile_interval=300, static_refresh=300)
+    base.update(kw)
+    return ks.Config(**base)
+
+
+class FakeKnock:
+    def __init__(self, entries):
+        self.entries_value = entries
+        self.fail = None
+
+    def entries(self):
+        if self.fail:
+            raise self.fail
+        return list(self.entries_value)
+
+
+class FakeStatic:
+    def __init__(self, entries=()):
+        self.value = list(entries)
+
+    def entries(self):
+        return list(self.value)
+
+
+class FakeUniFi:
+    def __init__(self):
+        self.calls = []
+
+    def sync(self, list_id, want):
+        self.calls.append((list_id, set(want)))
+        return True
+
+
+class Clock:
+    def __init__(self):
+        self.t = 1000.0
+
+    def __call__(self):
+        return self.t
+
+
+class NormaliseTests(unittest.TestCase):
+    def test_canonical_forms(self):
+        v4, v6 = ks.normalise(["1.2.3.4", "1.2.3.4/32", "10.0.0.5/24", "2a00:1::1", "2a00:2::/48", "nope"])
+        self.assertEqual(v4, {"1.2.3.4", "10.0.0.0/24"})
+        self.assertEqual(v6, {"2a00:1::/64"})  # /48 refused as over-broad
+
+    def test_refuses_broad_ipv4(self):
+        v4, _ = ks.normalise(["0.0.0.0/0", "8.0.0.0/7"])
+        self.assertEqual(v4, set())
+
+
+class StaticTests(unittest.TestCase):
+    def test_parse_static_lines(self):
+        ips, hosts = ks.parse_static_lines([
+            "# comment", "1.2.3.4  # mum", "5.6.7.0/24, mum.ddns.net", "", "2a00::1 dad.example.com",
+        ])
+        self.assertEqual(ips, ["1.2.3.4", "5.6.7.0/24", "2a00::1"])
+        self.assertEqual(hosts, ["mum.ddns.net", "dad.example.com"])
+
+    def test_file_and_env_merge_and_keep_last_good_resolution(self):
+        answers = {"a.example": ["9.9.9.9"]}
+
+        def resolver(host):
+            if host not in answers:
+                raise OSError("nxdomain")
+            return answers[host]
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "static.txt")
+            with open(path, "w") as f:
+                f.write("8.8.8.8\na.example\n")
+            src = ks.StaticSource(cfg(static_file=path, static_ips=["1.1.1.1"], static_refresh=0), resolver)
+            self.assertEqual(sorted(src.entries()), ["1.1.1.1", "8.8.8.8", "9.9.9.9"])
+            del answers["a.example"]  # DNS blip
+            self.assertIn("9.9.9.9", src.entries())
+            os.remove(path)
+            self.assertEqual(src.entries(), ["1.1.1.1"])
+
+
+class UniFiItemTests(unittest.TestCase):
+    def test_item_shapes(self):
+        self.assertEqual(ks.item_value("1.2.3.4"), "1.2.3.4")
+        self.assertEqual(ks.item_value({"type": "IP", "value": "1.2.3.4"}), "1.2.3.4")
+        self.assertEqual(ks.make_item({"type": "IP", "value": "x"}, "5.5.5.5"), {"type": "IP", "value": "5.5.5.5"})
+        self.assertEqual(ks.make_item(None, "5.5.5.5"), "5.5.5.5")
+
+    def test_sync_skips_put_when_equivalent(self):
+        u = ks.UniFi(cfg())
+        calls = []
+
+        def call(method, path, body=None):
+            calls.append(method)
+            return {"type": "IPV4", "name": "knock", "items": [{"value": "1.2.3.4/32"}]}
+
+        u.call = call
+        self.assertFalse(u.sync("L4", {"1.2.3.4"}))
+        self.assertEqual(calls, ["GET"])
+        self.assertTrue(u.sync("L4", {"1.2.3.4", "5.6.7.8"}))
+        self.assertEqual(calls, ["GET", "GET", "PUT"])
+
+
+class SyncerTests(unittest.TestCase):
+    def setUp(self):
+        self.clock = Clock()
+        self.knock = FakeKnock(["1.2.3.4"])
+        self.unifi = FakeUniFi()
+        self.syncer = ks.Syncer(cfg(), self.knock, FakeStatic(["5.5.5.5"]), self.unifi, self.clock)
+
+    def test_only_touches_unifi_on_change_or_reconcile(self):
+        self.syncer.cycle()
+        self.assertEqual(self.unifi.calls, [("L4", {"1.2.3.4", "5.5.5.5"}), ("L6", {"2001:db8::/64"})])
+        self.unifi.calls.clear()
+
+        self.clock.t += 15
+        self.syncer.cycle()
+        self.assertEqual(self.unifi.calls, [])
+
+        self.knock.entries_value = ["1.2.3.4", "2a00::1"]
+        self.clock.t += 15
+        self.syncer.cycle()
+        self.assertEqual(self.unifi.calls, [("L6", {"2a00::/64"})])
+        self.unifi.calls.clear()
+
+        self.clock.t += 300
+        self.syncer.cycle()
+        self.assertEqual([c[0] for c in self.unifi.calls], ["L4", "L6"])
+
+    def test_worker_failure_leaves_unifi_alone(self):
+        self.knock.fail = OSError("down")
+        with self.assertRaises(RuntimeError):
+            self.syncer.cycle()
+        self.assertEqual(self.unifi.calls, [])
+
+    def test_unifi_failure_forces_retry(self):
+        def boom(list_id, want):
+            raise OSError("unifi down")
+
+        self.unifi.sync = boom
+        with self.assertRaises(OSError):
+            self.syncer.cycle()
+        self.unifi.sync = FakeUniFi.sync.__get__(self.unifi)
+        self.clock.t += 15
+        self.syncer.cycle()
+        self.assertEqual(self.unifi.calls[0][0], "L4")
+
+
+class ConfigTests(unittest.TestCase):
+    def test_missing_vars(self):
+        with self.assertRaises(SystemExit):
+            ks.Config.from_env({})
+
+    def test_dump_does_not_need_knock_vars(self):
+        env = {"UNIFI_HOST": "https://u/", "UNIFI_API_KEY": "k", "UNIFI_SITE_ID": "s", "UNIFI_LIST_V4_ID": "l"}
+        c = ks.Config.from_env(env, need_knock=False)
+        self.assertEqual(c.unifi_host, "https://u")
+        self.assertEqual(c.interval, 15.0)
+
+    def test_interval_floor(self):
+        env = {"UNIFI_HOST": "h", "UNIFI_API_KEY": "k", "UNIFI_SITE_ID": "s", "UNIFI_LIST_V4_ID": "l",
+               "SYNC_INTERVAL": "1"}
+        self.assertEqual(ks.Config.from_env(env, need_knock=False).interval, 5.0)
+
+
+if __name__ == "__main__":
+    unittest.main()

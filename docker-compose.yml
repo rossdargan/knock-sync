@@ -1,0 +1,23 @@
+services:
+  knock-sync:
+    # Replace OWNER with your GitHub user/org (lowercase).
+    image: ghcr.io/OWNER/knock-sync:latest
+    container_name: knock-sync
+    restart: unless-stopped
+    env_file: knock.env
+    volumes:
+      # Optional: static allowlist at ./config/static.txt, hot-reloaded on change.
+      # A directory mount (not a single file) so edits are seen even when editors replace the file.
+      - ./config:/config:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"

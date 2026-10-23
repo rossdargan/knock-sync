@@ -1,0 +1,8 @@
+# Static allowlist - always whitelisted regardless of knocks.
+# One or more entries per line (space or comma separated); '#' starts a comment.
+# Entries may be IPv4/IPv6 addresses, CIDRs, or hostnames (re-resolved every STATIC_REFRESH seconds).
+# The file is re-read automatically when it changes - no restart needed.
+
+# 203.0.113.10        # office
+# 198.51.100.0/28     # VPN egress range
+# mum.ddns.net        # relative's dynamic DNS
