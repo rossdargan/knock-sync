@@ -4,6 +4,10 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # One PR for all action bumps instead of one each (avoids conflicts on adjacent lines).
+    groups:
+      actions:
+        patterns: ["*"]
   - package-ecosystem: docker
     directory: /
     schedule:
