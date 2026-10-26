@@ -212,17 +212,43 @@ class KnockClient:
         return list(self.cached)
 
 
+def parse_entry(text, label=None):
+    """'Label=entry' or 'entry' -> (entry, label). Labels are free text and never sent to UniFi."""
+    text = text.strip()
+    if "=" in text:
+        label, text = (s.strip() for s in text.split("=", 1))
+    return text, (label or None)
+
+
 def parse_static_lines(lines):
-    """Split static-file lines into (ips/cidrs, hostnames). '#' starts a comment; ',' or space separate."""
-    ips, hosts = [], []
+    """Parse static-file lines into [(entry, label)].
+
+    'entry  # label' (the comment labels every entry on that line), 'Label = entry', or several
+    entries separated by spaces/commas. Lines starting with '#' are ignored.
+    """
+    out = []
     for line in lines:
-        for token in line.split("#", 1)[0].replace(",", " ").split():
-            try:
-                ipaddress.ip_network(token, strict=False)
-                ips.append(token)
-            except ValueError:
-                hosts.append(token)
-    return ips, hosts
+        body, _, comment = line.partition("#")
+        comment = comment.strip() or None
+        if "=" in body:
+            entry, label = parse_entry(body)
+            if entry:
+                out.append((entry, label or comment))
+            continue
+        out.extend((token, comment) for token in body.replace(",", " ").split())
+    return out
+
+
+def is_ip(entry):
+    try:
+        ipaddress.ip_network(entry, strict=False)
+        return True
+    except ValueError:
+        return False
+
+
+def describe(pairs):
+    return ", ".join(f"{e} ({l})" if l else e for e, l in pairs) or "none"
 
 
 def resolve_host(host):
@@ -236,22 +262,28 @@ def resolve_host(host):
 
 
 class StaticSource:
-    """STATIC_IPS / STATIC_HOSTS env vars plus an optional, hot-reloaded STATIC_FILE."""
+    """STATIC_IPS / STATIC_HOSTS env vars plus an optional, hot-reloaded STATIC_FILE.
+
+    entries() returns [(entry, label)]; hostnames are resolved and their addresses labelled with the host.
+    """
 
     def __init__(self, cfg, resolver=resolve_host):
         self.cfg = cfg
         self.resolver = resolver
+        self.env_pairs = [parse_entry(t) for t in list(cfg.static_ips) + list(cfg.static_hosts)]
         self.file_sig = None
-        self.file_ips, self.file_hosts = [], []
+        self.file_pairs = []
         self.resolved = {}
         self.next_resolve = 0.0
+        if self.env_pairs:
+            log.info("static (env): %s", describe(self.env_pairs))
 
     def _load_file(self):
         path = self.cfg.static_file
         if not path or not os.path.isfile(path):
             if self.file_sig is not None:
                 log.warning("static file %s disappeared; dropping its entries", path)
-                self.file_sig, self.file_ips, self.file_hosts = None, [], []
+                self.file_sig, self.file_pairs = None, []
                 self.next_resolve = 0.0
             return
         st = os.stat(path)
@@ -259,14 +291,15 @@ class StaticSource:
         if sig == self.file_sig:
             return
         with open(path, encoding="utf-8") as f:
-            self.file_ips, self.file_hosts = parse_static_lines(f)
+            self.file_pairs = parse_static_lines(f)
         self.file_sig = sig
         self.next_resolve = 0.0
-        log.info("loaded %s: %d address(es), %d hostname(s)", path, len(self.file_ips), len(self.file_hosts))
+        log.info("static (%s): %s", path, describe(self.file_pairs))
 
     def entries(self):
         self._load_file()
-        hosts = set(self.cfg.static_hosts) | set(self.file_hosts)
+        pairs = self.env_pairs + self.file_pairs
+        hosts = {e: l for e, l in pairs if not is_ip(e)}
         now = time.monotonic()
         if now >= self.next_resolve:
             for host in hosts:
@@ -276,11 +309,12 @@ class StaticSource:
                     # Keep the last good answer so a DNS blip doesn't lock relatives out.
                     log.warning("can't resolve %s: %s (keeping %s)", host, e, self.resolved.get(host, []))
             self.next_resolve = now + self.cfg.static_refresh
-        for host in set(self.resolved) - hosts:
+        for host in set(self.resolved) - set(hosts):
             del self.resolved[host]
-        out = list(self.cfg.static_ips) + list(self.file_ips)
-        for addrs in self.resolved.values():
-            out.extend(addrs)
+        out = [(e, l) for e, l in pairs if is_ip(e)]
+        for host, addrs in self.resolved.items():
+            label = f"{hosts[host]} via {host}" if hosts[host] else host
+            out.extend((a, label) for a in addrs)
         return out
 
 
@@ -339,6 +373,21 @@ def make_item(template, value):
     return {"type": "SUBNET" if "/" in value else "IP_ADDRESS", "value": value}
 
 
+def label_map(pairs):
+    """{canonical value: 'label1, label2'} so log lines can say why an address is allowed."""
+    labels = {}
+    for entry, label in pairs:
+        if not label:
+            continue
+        try:
+            value = canonical(entry)[1]
+        except ValueError:
+            continue
+        if label not in labels.setdefault(value, []):
+            labels[value].append(label)
+    return {v: ", ".join(ls) for v, ls in labels.items()}
+
+
 def _canon_or_raw(value):
     try:
         return canonical(value)[1]
@@ -359,7 +408,7 @@ class UniFi:
     def get_list(self, list_id):
         return self.call("GET", f"/traffic-matching-lists/{list_id}")
 
-    def sync(self, list_id, want):
+    def sync(self, list_id, want, labels=None):
         """Make the list equal `want`. Returns True if a PUT was needed."""
         cur = self.get_list(list_id)
         items = cur.get("items") or []
@@ -370,7 +419,9 @@ class UniFi:
         body = {"type": cur["type"], "name": cur["name"],
                 "items": [make_item(template, v) for v in sorted(want)]}
         self.call("PUT", f"/traffic-matching-lists/{list_id}", body)
-        log.info("%s: +%s -%s", cur["name"], sorted(set(want) - have), sorted(have - set(want)))
+        labels = labels or {}
+        fmt = lambda vs: [f"{v} ({labels[v]})" if v in labels else v for v in sorted(vs)]  # noqa: E731
+        log.info("%s: +%s -%s", cur["name"], fmt(set(want) - have), fmt(have - set(want)))
         return True
 
 
@@ -398,7 +449,11 @@ class Syncer:
             raise
         except Exception as e:  # Worker unreachable: leave UniFi as-is rather than guess
             raise RuntimeError(f"can't reach knock worker: {e}") from e
-        v4, v6 = normalise(entries + self.static.entries())
+        pairs = [(e, "knock") for e in entries]
+        pairs += [p if isinstance(p, tuple) else (p, None) for p in self.static.entries()]
+        v4, v6 = normalise([e for e, _ in pairs])
+        labels = label_map(pairs)
+        labels.update({v: "placeholder" for v in SENTINEL.values()})
         now = self.clock()
         force = self.last_reconcile is None or now - self.last_reconcile >= self.cfg.reconcile_interval
         for list_id, desired, version in self.targets(v4, v6):
@@ -406,7 +461,7 @@ class Syncer:
             if not force and self.applied.get(list_id) == want:
                 continue
             try:
-                self.unifi.sync(list_id, want)
+                self.unifi.sync(list_id, want, labels)
             except Exception:
                 self.applied.pop(list_id, None)
                 raise

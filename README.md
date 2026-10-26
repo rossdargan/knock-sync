@@ -23,8 +23,15 @@ After a failure it backs off exponentially (up to `MAX_BACKOFF`) and honours `Re
 
 You can combine either or both:
 
-- **Env vars:** `STATIC_IPS=203.0.113.10,198.51.100.0/28` and `STATIC_HOSTS=mum.ddns.net`
-- **File:** `./config/static.txt`, mounted at `/config/static.txt`. It's re-read automatically when it changes, so no restart is needed. See [static.txt.example](static.txt.example).
+- **Env vars:** `STATIC_IPS=Anthropic API=160.79.104.0/21, Office=203.0.113.10` and `STATIC_HOSTS=Mum=mum.ddns.net`. The `Label=` prefix is optional.
+- **File:** `./config/static.txt`, mounted at `/config/static.txt`. It's re-read automatically when it changes, so no restart is needed. Label entries with a trailing `# comment` or `Label = entry`. See [static.txt.example](static.txt.example).
+
+Labels are only shown in the logs, because UniFi list entries have no description field. The static list is printed at startup and whenever it changes, and every change to UniFi shows why each address is there:
+
+```
+static (env): 160.79.104.0/21 (Anthropic API), 203.0.113.10 (Office)
+allow-v4: +['160.79.104.0/21 (Anthropic API)', '198.51.100.23 (knock)'] -['192.0.2.1 (placeholder)']
+```
 
 Over-broad entries are refused (IPv4 shorter than `/8`, IPv6 shorter than `/64`). IPv6 hosts are widened to their `/64`.
 

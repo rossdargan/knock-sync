@@ -38,8 +38,9 @@ class FakeUniFi:
     def __init__(self):
         self.calls = []
 
-    def sync(self, list_id, want):
+    def sync(self, list_id, want, labels=None):
         self.calls.append((list_id, set(want)))
+        self.labels = labels
         return True
 
 
@@ -64,11 +65,19 @@ class NormaliseTests(unittest.TestCase):
 
 class StaticTests(unittest.TestCase):
     def test_parse_static_lines(self):
-        ips, hosts = ks.parse_static_lines([
+        pairs = ks.parse_static_lines([
             "# comment", "1.2.3.4  # mum", "5.6.7.0/24, mum.ddns.net", "", "2a00::1 dad.example.com",
+            "Anthropic API = 160.79.104.0/21", "Office=203.0.113.10  # overridden by '='",
         ])
-        self.assertEqual(ips, ["1.2.3.4", "5.6.7.0/24", "2a00::1"])
-        self.assertEqual(hosts, ["mum.ddns.net", "dad.example.com"])
+        self.assertEqual(pairs, [
+            ("1.2.3.4", "mum"), ("5.6.7.0/24", None), ("mum.ddns.net", None), ("2a00::1", None),
+            ("dad.example.com", None), ("160.79.104.0/21", "Anthropic API"), ("203.0.113.10", "Office"),
+        ])
+
+    def test_parse_entry(self):
+        self.assertEqual(ks.parse_entry(" Anthropic API=160.79.104.0/21 "), ("160.79.104.0/21", "Anthropic API"))
+        self.assertEqual(ks.parse_entry("1.2.3.4"), ("1.2.3.4", None))
+        self.assertEqual(ks.parse_entry("=1.2.3.4"), ("1.2.3.4", None))
 
     def test_file_and_env_merge_and_keep_last_good_resolution(self):
         answers = {"a.example": ["9.9.9.9"]}
@@ -81,13 +90,40 @@ class StaticTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "static.txt")
             with open(path, "w") as f:
-                f.write("8.8.8.8\na.example\n")
-            src = ks.StaticSource(cfg(static_file=path, static_ips=["1.1.1.1"], static_refresh=0), resolver)
-            self.assertEqual(sorted(src.entries()), ["1.1.1.1", "8.8.8.8", "9.9.9.9"])
+                f.write("8.8.8.8  # dns\nMum = a.example\n")
+            c = cfg(static_file=path, static_ips=["Office=1.1.1.1"], static_hosts=["b.example"], static_refresh=0)
+            answers["b.example"] = ["7.7.7.7"]
+            src = ks.StaticSource(c, resolver)
+            self.assertEqual(sorted(src.entries()), [
+                ("1.1.1.1", "Office"), ("7.7.7.7", "b.example"), ("8.8.8.8", "dns"), ("9.9.9.9", "Mum via a.example"),
+            ])
             del answers["a.example"]  # DNS blip
-            self.assertIn("9.9.9.9", src.entries())
+            self.assertIn(("9.9.9.9", "Mum via a.example"), src.entries())
             os.remove(path)
-            self.assertEqual(src.entries(), ["1.1.1.1"])
+            self.assertEqual(sorted(src.entries()), [("1.1.1.1", "Office"), ("7.7.7.7", "b.example")])
+
+
+class LabelTests(unittest.TestCase):
+    def test_label_map_canonicalises_and_merges(self):
+        labels = ks.label_map([("1.2.3.4/32", "knock"), ("1.2.3.4", "Office"), ("1.2.3.4", "Office"),
+                               ("2a00::1", "phone"), ("junk", "x"), ("5.5.5.5", None)])
+        self.assertEqual(labels, {"1.2.3.4": "knock, Office", "2a00::/64": "phone"})
+
+    def test_sync_log_includes_labels(self):
+        u = ks.UniFi(cfg())
+        u.call = lambda method, path, body=None: body if method == "PUT" else {
+            "type": "IPV4_ADDRESSES", "name": "allow-v4", "items": [{"type": "IP_ADDRESS", "value": "192.0.2.1"}]}
+        with self.assertLogs("knock-sync", "INFO") as logs:
+            u.sync("L4", {"160.79.104.0/21"}, {"160.79.104.0/21": "Anthropic API", "192.0.2.1": "placeholder"})
+        self.assertIn("+['160.79.104.0/21 (Anthropic API)'] -['192.0.2.1 (placeholder)']", logs.output[0])
+
+    def test_syncer_passes_labels(self):
+        unifi = FakeUniFi()
+        static = FakeStatic([("160.79.104.0/21", "Anthropic API")])
+        ks.Syncer(cfg(list_v6=""), FakeKnock(["1.2.3.4"]), static, unifi, Clock()).cycle()
+        self.assertEqual(unifi.calls, [("L4", {"1.2.3.4", "160.79.104.0/21"})])
+        self.assertEqual(unifi.labels["160.79.104.0/21"], "Anthropic API")
+        self.assertEqual(unifi.labels["1.2.3.4"], "knock")
 
 
 class UniFiItemTests(unittest.TestCase):
@@ -170,7 +206,7 @@ class SyncerTests(unittest.TestCase):
         self.assertEqual(self.unifi.calls, [])
 
     def test_unifi_failure_forces_retry(self):
-        def boom(list_id, want):
+        def boom(*args):
             raise OSError("unifi down")
 
         self.unifi.sync = boom

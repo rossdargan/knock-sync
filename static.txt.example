@@ -1,8 +1,10 @@
 # Static allowlist - always whitelisted regardless of knocks.
-# One or more entries per line (space or comma separated); '#' starts a comment.
 # Entries may be IPv4/IPv6 addresses, CIDRs, or hostnames (re-resolved every STATIC_REFRESH seconds).
+# Say why each entry is here with a trailing '# comment' or 'Label = entry'; the label is shown in the
+# logs next to the address. Lines starting with '#' are ignored.
 # The file is re-read automatically when it changes - no restart needed.
 
+# 160.79.104.0/21     # Anthropic API
 # 203.0.113.10        # office
-# 198.51.100.0/28     # VPN egress range
-# mum.ddns.net        # relative's dynamic DNS
+# VPN egress = 198.51.100.0/28
+# mum.ddns.net        # Mum's house (dynamic DNS)
