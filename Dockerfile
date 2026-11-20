@@ -1,4 +1,4 @@
-FROM python:3.13-alpine
+FROM python:3.15-alpine
 
 LABEL org.opencontainers.image.title="knock-sync" \
       org.opencontainers.image.description="Sync a Cloudflare Worker knock allowlist + static IPs into UniFi traffic matching lists"
